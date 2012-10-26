@@ -28,12 +28,32 @@ my $TESTS = {
     test_class => [qw(forking)],
   },
 
+  charset_dele_utf8_allowed => {
+    order => ++$order,
+    test_class => [qw(forking)],
+  },
+
+  charset_dele_utf8_rejected => {
+    order => ++$order,
+    test_class => [qw(forking)],
+  },
+
   charset_mkd_utf8_allowed => {
     order => ++$order,
     test_class => [qw(forking)],
   },
 
   charset_mkd_utf8_rejected => {
+    order => ++$order,
+    test_class => [qw(forking)],
+  },
+
+  charset_rnfr_utf8_allowed => {
+    order => ++$order,
+    test_class => [qw(forking)],
+  },
+
+  charset_rnfr_utf8_rejected => {
     order => ++$order,
     test_class => [qw(forking)],
   },
@@ -142,7 +162,7 @@ sub charset_appe_utf8_allowed {
     IfModules => {
       'mod_charset.c' => {
         CharsetEngine => 'on',
-        CharsetAllowFilter => 'UTF8',
+        CharsetRequired => 'UTF8 ASCII',
       },
 
       'mod_delay.c' => {
@@ -283,7 +303,7 @@ sub charset_appe_utf8_rejected {
     IfModules => {
       'mod_charset.c' => {
         CharsetEngine => 'on',
-        CharsetAllowFilter => 'UTF8',
+        CharsetRequired => 'UTF8 ASCII',
       },
 
       'mod_delay.c' => {
@@ -326,8 +346,289 @@ sub charset_appe_utf8_rejected {
       $self->assert($expected == $resp_code,
         test_msg("Expected response code $expected, got $resp_code"));
 
-      $expected = "$test_filename: Illegal byte sequence";
+      $expected = '(Illegal byte sequence|Invalid or incomplete multibyte or wide character)$';
+      $self->assert(qr/$expected/, $resp_msg,
+        test_msg("Expected response message '$expected', got '$resp_msg'"));
+
+      $client->quit();
+    };
+
+    if ($@) {
+      $ex = $@;
+    }
+
+    $wfh->print("done\n");
+    $wfh->flush();
+
+  } else {
+    eval { server_wait($config_file, $rfh) };
+    if ($@) {
+      warn($@);
+      exit 1;
+    }
+
+    exit 0;
+  }
+
+  # Stop server
+  server_stop($pid_file);
+
+  $self->assert_child_ok($pid);
+
+  if ($ex) {
+    test_append_logfile($log_file, $ex);
+    unlink($log_file);
+
+    die($ex);
+  }
+
+  unlink($log_file);
+}
+
+sub charset_dele_utf8_allowed {
+  my $self = shift;
+  my $tmpdir = $self->{tmpdir};
+
+  my $config_file = "$tmpdir/charset.conf";
+  my $pid_file = File::Spec->rel2abs("$tmpdir/charset.pid");
+  my $scoreboard_file = File::Spec->rel2abs("$tmpdir/charset.scoreboard");
+
+  my $log_file = test_get_logfile();
+
+  my $auth_user_file = File::Spec->rel2abs("$tmpdir/charset.passwd");
+  my $auth_group_file = File::Spec->rel2abs("$tmpdir/charset.group");
+
+  my $user = 'proftpd';
+  my $passwd = 'test';
+  my $group = 'ftpd';
+  my $home_dir = File::Spec->rel2abs($tmpdir);
+  my $uid = 500;
+  my $gid = 500;
+
+  # Make sure that, if we're running as root, that the home directory has
+  # permissions/privs set for the account we create
+  if ($< == 0) {
+    unless (chmod(0755, $home_dir)) {
+      die("Can't set perms on $home_dir to 0755: $!");
+    }
+
+    unless (chown($uid, $gid, $home_dir)) {
+      die("Can't set owner of $home_dir to $uid/$gid: $!");
+    }
+  }
+
+  auth_user_write($auth_user_file, $user, $passwd, $uid, $gid, $home_dir,
+    '/bin/bash');
+  auth_group_write($auth_group_file, $group, $gid, $user);
+
+  my $test_filename = 'test.txt';
+  my $test_path = File::Spec->rel2abs("$tmpdir/$test_filename");
+  if (open(my $fh, "> $test_path")) {
+    unless (close($fh)) {
+      die("Can't write $test_path: $!");
+    }
+
+  } else {
+    die("Can't open $test_path: $!");
+  }
+
+  my $config = {
+    PidFile => $pid_file,
+    ScoreboardFile => $scoreboard_file,
+    SystemLog => $log_file,
+    TraceLog => $log_file,
+    Trace => 'charset:10',
+
+    AuthUserFile => $auth_user_file,
+    AuthGroupFile => $auth_group_file,
+
+    IfModules => {
+      'mod_charset.c' => {
+        CharsetEngine => 'on',
+        CharsetRequired => 'UTF8 ASCII',
+      },
+
+      'mod_delay.c' => {
+        DelayEngine => 'off',
+      },
+    },
+  };
+
+  my ($port, $config_user, $config_group) = config_write($config_file, $config);
+
+  # Open pipes, for use between the parent and child processes.  Specifically,
+  # the child will indicate when it's done with its test by writing a message
+  # to the parent.
+  my ($rfh, $wfh);
+  unless (pipe($rfh, $wfh)) {
+    die("Can't open pipe: $!");
+  }
+
+  my $ex;
+
+  # Fork child
+  $self->handle_sigchld();
+  defined(my $pid = fork()) or die("Can't fork: $!");
+  if ($pid) {
+    eval {
+      my $client = ProFTPD::TestSuite::FTP->new('127.0.0.1', $port, 1);
+      $client->login($user, $passwd);
+
+      $client->dele($test_filename);
+
+      my $resp_code = $client->response_code();
+      my $resp_msg = $client->response_msg();
+
+      my $expected;
+
+      $expected = 250;
+      $self->assert($expected == $resp_code,
+        test_msg("Expected response code $expected, got $resp_code"));
+
+      $expected = 'DELE command successful';
       $self->assert($expected eq $resp_msg,
+        test_msg("Expected response message '$expected', got '$resp_msg'"));
+
+      $client->quit();
+    };
+
+    if ($@) {
+      $ex = $@;
+    }
+
+    $wfh->print("done\n");
+    $wfh->flush();
+
+  } else {
+    eval { server_wait($config_file, $rfh) };
+    if ($@) {
+      warn($@);
+      exit 1;
+    }
+
+    exit 0;
+  }
+
+  # Stop server
+  server_stop($pid_file);
+
+  $self->assert_child_ok($pid);
+
+  if ($ex) {
+    test_append_logfile($log_file, $ex);
+    unlink($log_file);
+
+    die($ex);
+  }
+
+  unlink($log_file);
+}
+
+sub charset_dele_utf8_rejected {
+  my $self = shift;
+  my $tmpdir = $self->{tmpdir};
+
+  my $config_file = "$tmpdir/charset.conf";
+  my $pid_file = File::Spec->rel2abs("$tmpdir/charset.pid");
+  my $scoreboard_file = File::Spec->rel2abs("$tmpdir/charset.scoreboard");
+
+  my $log_file = test_get_logfile();
+
+  my $auth_user_file = File::Spec->rel2abs("$tmpdir/charset.passwd");
+  my $auth_group_file = File::Spec->rel2abs("$tmpdir/charset.group");
+
+  my $user = 'proftpd';
+  my $passwd = 'test';
+  my $group = 'ftpd';
+  my $home_dir = File::Spec->rel2abs($tmpdir);
+  my $uid = 500;
+  my $gid = 500;
+
+  # Make sure that, if we're running as root, that the home directory has
+  # permissions/privs set for the account we create
+  if ($< == 0) {
+    unless (chmod(0755, $home_dir)) {
+      die("Can't set perms on $home_dir to 0755: $!");
+    }
+
+    unless (chown($uid, $gid, $home_dir)) {
+      die("Can't set owner of $home_dir to $uid/$gid: $!");
+    }
+  }
+
+  auth_user_write($auth_user_file, $user, $passwd, $uid, $gid, $home_dir,
+    '/bin/bash');
+  auth_group_write($auth_group_file, $group, $gid, $user);
+
+  my $test_filename = 'olá çim poi...!#$%#%$>= ü';
+  my $test_path = File::Spec->rel2abs("$tmpdir/$test_filename");
+  if (open(my $fh, "> $test_path")) {
+    unless (close($fh)) {
+      die("Can't write $test_path: $!");
+    }
+
+  } else {
+    die("Can't open $test_path: $!");
+  }
+
+  my $config = {
+    PidFile => $pid_file,
+    ScoreboardFile => $scoreboard_file,
+    SystemLog => $log_file,
+    TraceLog => $log_file,
+    Trace => 'charset:10',
+
+    AuthUserFile => $auth_user_file,
+    AuthGroupFile => $auth_group_file,
+
+    IfModules => {
+      'mod_charset.c' => {
+        CharsetEngine => 'on',
+        CharsetRequired => 'UTF8 ASCII',
+      },
+
+      'mod_delay.c' => {
+        DelayEngine => 'off',
+      },
+    },
+  };
+
+  my ($port, $config_user, $config_group) = config_write($config_file, $config);
+
+  # Open pipes, for use between the parent and child processes.  Specifically,
+  # the child will indicate when it's done with its test by writing a message
+  # to the parent.
+  my ($rfh, $wfh);
+  unless (pipe($rfh, $wfh)) {
+    die("Can't open pipe: $!");
+  }
+
+  my $ex;
+
+  # Fork child
+  $self->handle_sigchld();
+  defined(my $pid = fork()) or die("Can't fork: $!");
+  if ($pid) {
+    eval {
+      my $client = ProFTPD::TestSuite::FTP->new('127.0.0.1', $port, 1);
+      $client->login($user, $passwd);
+
+      eval { $client->dele($test_filename) };
+      unless ($@) {
+        die("DELE $test_filename succeeded unexpectedly");
+      }
+
+      my $resp_code = $client->response_code();
+      my $resp_msg = $client->response_msg();
+
+      my $expected;
+
+      $expected = 501;
+      $self->assert($expected == $resp_code,
+        test_msg("Expected response code $expected, got $resp_code"));
+
+      $expected = '(Illegal byte sequence|Invalid or incomplete multibyte or wide character)$';
+      $self->assert(qr/$expected/, $resp_msg,
         test_msg("Expected response message '$expected', got '$resp_msg'"));
 
       $client->quit();
@@ -417,7 +718,7 @@ sub charset_mkd_utf8_allowed {
     IfModules => {
       'mod_charset.c' => {
         CharsetEngine => 'on',
-        CharsetAllowFilter => 'UTF8',
+        CharsetRequired => 'UTF8 ASCII',
       },
 
       'mod_delay.c' => {
@@ -552,7 +853,7 @@ sub charset_mkd_utf8_rejected {
     IfModules => {
       'mod_charset.c' => {
         CharsetEngine => 'on',
-        CharsetAllowFilter => 'UTF8',
+        CharsetRequired => 'UTF8 ASCII',
       },
 
       'mod_delay.c' => {
@@ -595,8 +896,289 @@ sub charset_mkd_utf8_rejected {
       $self->assert($expected == $resp_code,
         test_msg("Expected response code $expected, got $resp_code"));
 
-      $expected = "$test_dirname: Illegal byte sequence";
+      $expected = '(Illegal byte sequence|Invalid or incomplete multibyte or wide character)$';
+      $self->assert(qr/$expected/, $resp_msg,
+        test_msg("Expected response message '$expected', got '$resp_msg'"));
+
+      $client->quit();
+    };
+
+    if ($@) {
+      $ex = $@;
+    }
+
+    $wfh->print("done\n");
+    $wfh->flush();
+
+  } else {
+    eval { server_wait($config_file, $rfh) };
+    if ($@) {
+      warn($@);
+      exit 1;
+    }
+
+    exit 0;
+  }
+
+  # Stop server
+  server_stop($pid_file);
+
+  $self->assert_child_ok($pid);
+
+  if ($ex) {
+    test_append_logfile($log_file, $ex);
+    unlink($log_file);
+
+    die($ex);
+  }
+
+  unlink($log_file);
+}
+
+sub charset_rnfr_utf8_allowed {
+  my $self = shift;
+  my $tmpdir = $self->{tmpdir};
+
+  my $config_file = "$tmpdir/charset.conf";
+  my $pid_file = File::Spec->rel2abs("$tmpdir/charset.pid");
+  my $scoreboard_file = File::Spec->rel2abs("$tmpdir/charset.scoreboard");
+
+  my $log_file = test_get_logfile();
+
+  my $auth_user_file = File::Spec->rel2abs("$tmpdir/charset.passwd");
+  my $auth_group_file = File::Spec->rel2abs("$tmpdir/charset.group");
+
+  my $user = 'proftpd';
+  my $passwd = 'test';
+  my $group = 'ftpd';
+  my $home_dir = File::Spec->rel2abs($tmpdir);
+  my $uid = 500;
+  my $gid = 500;
+
+  # Make sure that, if we're running as root, that the home directory has
+  # permissions/privs set for the account we create
+  if ($< == 0) {
+    unless (chmod(0755, $home_dir)) {
+      die("Can't set perms on $home_dir to 0755: $!");
+    }
+
+    unless (chown($uid, $gid, $home_dir)) {
+      die("Can't set owner of $home_dir to $uid/$gid: $!");
+    }
+  }
+
+  auth_user_write($auth_user_file, $user, $passwd, $uid, $gid, $home_dir,
+    '/bin/bash');
+  auth_group_write($auth_group_file, $group, $gid, $user);
+
+  my $src_filename = 'src.txt';
+  my $src_path = File::Spec->rel2abs("$tmpdir/$src_filename");
+  if (open(my $fh, "> $src_path")) {
+    unless (close($fh)) {
+      die("Can't write $src_path: $!");
+    }
+
+  } else {
+    die("Can't open $src_path: $!");
+  }
+
+  my $config = {
+    PidFile => $pid_file,
+    ScoreboardFile => $scoreboard_file,
+    SystemLog => $log_file,
+    TraceLog => $log_file,
+    Trace => 'charset:10',
+
+    AuthUserFile => $auth_user_file,
+    AuthGroupFile => $auth_group_file,
+
+    IfModules => {
+      'mod_charset.c' => {
+        CharsetEngine => 'on',
+        CharsetRequired => 'UTF8 ASCII',
+      },
+
+      'mod_delay.c' => {
+        DelayEngine => 'off',
+      },
+    },
+  };
+
+  my ($port, $config_user, $config_group) = config_write($config_file, $config);
+
+  # Open pipes, for use between the parent and child processes.  Specifically,
+  # the child will indicate when it's done with its test by writing a message
+  # to the parent.
+  my ($rfh, $wfh);
+  unless (pipe($rfh, $wfh)) {
+    die("Can't open pipe: $!");
+  }
+
+  my $ex;
+
+  # Fork child
+  $self->handle_sigchld();
+  defined(my $pid = fork()) or die("Can't fork: $!");
+  if ($pid) {
+    eval {
+      my $client = ProFTPD::TestSuite::FTP->new('127.0.0.1', $port, 1);
+      $client->login($user, $passwd);
+
+      $client->rnfr($src_filename);
+
+      my $resp_code = $client->response_code();
+      my $resp_msg = $client->response_msg();
+
+      my $expected;
+
+      $expected = 350;
+      $self->assert($expected == $resp_code,
+        test_msg("Expected response code $expected, got $resp_code"));
+
+      $expected = "File or directory exists, ready for destination name";
       $self->assert($expected eq $resp_msg,
+        test_msg("Expected response message '$expected', got '$resp_msg'"));
+
+      $client->quit();
+    };
+
+    if ($@) {
+      $ex = $@;
+    }
+
+    $wfh->print("done\n");
+    $wfh->flush();
+
+  } else {
+    eval { server_wait($config_file, $rfh) };
+    if ($@) {
+      warn($@);
+      exit 1;
+    }
+
+    exit 0;
+  }
+
+  # Stop server
+  server_stop($pid_file);
+
+  $self->assert_child_ok($pid);
+
+  if ($ex) {
+    test_append_logfile($log_file, $ex);
+    unlink($log_file);
+
+    die($ex);
+  }
+
+  unlink($log_file);
+}
+
+sub charset_rnfr_utf8_rejected {
+  my $self = shift;
+  my $tmpdir = $self->{tmpdir};
+
+  my $config_file = "$tmpdir/charset.conf";
+  my $pid_file = File::Spec->rel2abs("$tmpdir/charset.pid");
+  my $scoreboard_file = File::Spec->rel2abs("$tmpdir/charset.scoreboard");
+
+  my $log_file = test_get_logfile();
+
+  my $auth_user_file = File::Spec->rel2abs("$tmpdir/charset.passwd");
+  my $auth_group_file = File::Spec->rel2abs("$tmpdir/charset.group");
+
+  my $user = 'proftpd';
+  my $passwd = 'test';
+  my $group = 'ftpd';
+  my $home_dir = File::Spec->rel2abs($tmpdir);
+  my $uid = 500;
+  my $gid = 500;
+
+  # Make sure that, if we're running as root, that the home directory has
+  # permissions/privs set for the account we create
+  if ($< == 0) {
+    unless (chmod(0755, $home_dir)) {
+      die("Can't set perms on $home_dir to 0755: $!");
+    }
+
+    unless (chown($uid, $gid, $home_dir)) {
+      die("Can't set owner of $home_dir to $uid/$gid: $!");
+    }
+  }
+
+  auth_user_write($auth_user_file, $user, $passwd, $uid, $gid, $home_dir,
+    '/bin/bash');
+  auth_group_write($auth_group_file, $group, $gid, $user);
+
+  my $src_filename = 'olá çim poi...!#$%#%$>= ü';
+  my $src_path = File::Spec->rel2abs("$tmpdir/$src_filename");
+  if (open(my $fh, "> $src_path")) {
+    unless (close($fh)) {
+      die("Can't write $src_path: $!");
+    }
+
+  } else {
+    die("Can't open $src_path: $!");
+  }
+
+  my $config = {
+    PidFile => $pid_file,
+    ScoreboardFile => $scoreboard_file,
+    SystemLog => $log_file,
+    TraceLog => $log_file,
+    Trace => 'charset:10',
+
+    AuthUserFile => $auth_user_file,
+    AuthGroupFile => $auth_group_file,
+
+    IfModules => {
+      'mod_charset.c' => {
+        CharsetEngine => 'on',
+        CharsetRequired => 'UTF8 ASCII',
+      },
+
+      'mod_delay.c' => {
+        DelayEngine => 'off',
+      },
+    },
+  };
+
+  my ($port, $config_user, $config_group) = config_write($config_file, $config);
+
+  # Open pipes, for use between the parent and child processes.  Specifically,
+  # the child will indicate when it's done with its test by writing a message
+  # to the parent.
+  my ($rfh, $wfh);
+  unless (pipe($rfh, $wfh)) {
+    die("Can't open pipe: $!");
+  }
+
+  my $ex;
+
+  # Fork child
+  $self->handle_sigchld();
+  defined(my $pid = fork()) or die("Can't fork: $!");
+  if ($pid) {
+    eval {
+      my $client = ProFTPD::TestSuite::FTP->new('127.0.0.1', $port, 1);
+      $client->login($user, $passwd);
+
+      eval { $client->rnfr($src_filename) };
+      unless ($@) {
+        die("RNFR $src_filename succeeded unexpectedly");
+      }
+
+      my $resp_code = $client->response_code();
+      my $resp_msg = $client->response_msg();
+
+      my $expected;
+
+      $expected = 501;
+      $self->assert($expected == $resp_code,
+        test_msg("Expected response code $expected, got $resp_code"));
+
+      $expected = '(Illegal byte sequence|Invalid or incomplete multibyte or wide character)$';
+      $self->assert(qr/$expected/, $resp_msg,
         test_msg("Expected response message '$expected', got '$resp_msg'"));
 
       $client->quit();
@@ -696,7 +1278,7 @@ sub charset_rnto_utf8_allowed {
     IfModules => {
       'mod_charset.c' => {
         CharsetEngine => 'on',
-        CharsetAllowFilter => 'UTF8',
+        CharsetRequired => 'UTF8 ASCII',
       },
 
       'mod_delay.c' => {
@@ -838,7 +1420,7 @@ sub charset_rnto_utf8_rejected {
     IfModules => {
       'mod_charset.c' => {
         CharsetEngine => 'on',
-        CharsetAllowFilter => 'UTF8',
+        CharsetRequired => 'UTF8 ASCII',
       },
 
       'mod_delay.c' => {
@@ -883,8 +1465,8 @@ sub charset_rnto_utf8_rejected {
       $self->assert($expected == $resp_code,
         test_msg("Expected response code $expected, got $resp_code"));
 
-      $expected = "$dst_filename: Illegal byte sequence";
-      $self->assert($expected eq $resp_msg,
+      $expected = '(Illegal byte sequence|Invalid or incomplete multibyte or wide character)$';
+      $self->assert(qr/$expected/, $resp_msg,
         test_msg("Expected response message '$expected', got '$resp_msg'"));
 
       $client->quit();
@@ -973,7 +1555,7 @@ sub charset_stor_utf8_allowed {
     IfModules => {
       'mod_charset.c' => {
         CharsetEngine => 'on',
-        CharsetAllowFilter => 'UTF8',
+        CharsetRequired => 'UTF8 ASCII',
       },
 
       'mod_delay.c' => {
@@ -1102,7 +1684,7 @@ sub charset_stor_utf8_rejected {
     IfModules => {
       'mod_charset.c' => {
         CharsetEngine => 'on',
-        CharsetAllowFilter => 'UTF8',
+        CharsetRequired => 'UTF8 ASCII',
       },
 
       'mod_delay.c' => {
@@ -1145,8 +1727,8 @@ sub charset_stor_utf8_rejected {
       $self->assert($expected == $resp_code,
         test_msg("Expected response code $expected, got $resp_code"));
 
-      $expected = "$test_filename: Illegal byte sequence";
-      $self->assert($expected eq $resp_msg,
+      $expected = '(Illegal byte sequence|Invalid or incomplete multibyte or wide character)$';
+      $self->assert(qr/$expected/, $resp_msg,
         test_msg("Expected response message '$expected', got '$resp_msg'"));
 
       $client->quit();
@@ -1236,7 +1818,7 @@ sub charset_xmkd_utf8_allowed {
     IfModules => {
       'mod_charset.c' => {
         CharsetEngine => 'on',
-        CharsetAllowFilter => 'UTF8',
+        CharsetRequired => 'UTF8 ASCII',
       },
 
       'mod_delay.c' => {
@@ -1371,7 +1953,7 @@ sub charset_xmkd_utf8_rejected {
     IfModules => {
       'mod_charset.c' => {
         CharsetEngine => 'on',
-        CharsetAllowFilter => 'UTF8',
+        CharsetRequired => 'UTF8 ASCII',
       },
 
       'mod_delay.c' => {
@@ -1414,8 +1996,8 @@ sub charset_xmkd_utf8_rejected {
       $self->assert($expected == $resp_code,
         test_msg("Expected response code $expected, got $resp_code"));
 
-      $expected = "$test_dirname: Illegal byte sequence";
-      $self->assert($expected eq $resp_msg,
+      $expected = '(Illegal byte sequence|Invalid or incomplete multibyte or wide character)$';
+      $self->assert(qr/$expected/, $resp_msg,
         test_msg("Expected response message '$expected', got '$resp_msg'"));
 
       $client->quit();
