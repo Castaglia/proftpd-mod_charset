@@ -1,0 +1,172 @@
+<!-- $Id: mod_lang.html,v 1.8 2010/08/10 17:39:08 castaglia Exp $ -->
+<!-- $Source: /cvsroot/proftp/proftpd/doc/modules/mod_lang.html,v $ -->
+
+<html>
+<head>
+<title>ProFTPD module mod_charset</title>
+</head>
+
+<body bgcolor=white>
+
+<hr>
+<center>
+<h2><b>ProFTPD module <code>mod_charset</code></b></h2>
+</center>
+<hr><br>
+
+<p>
+<b>Internalization and Localization</b><br>
+The <code>mod_lang</code> module is ProFTPD's module for handling the LANG
+and OPTS UTF8 commands, in support of <a href="http://www.faqs.org/rfcs/rfc2640.html">RFC 2640</a>.  The <code>mod_lang</code> module also supports character
+sets other than UTF8, for those sites which do not require RFC2640 support, but
+<i>do</i> use character sets other than ASCII.  This module is contained in the
+<code>mod_lang.c</code> file for ProFTPD 1.3.<i>x</i>, and is compiled in
+whenever the <code>--enable-nls</code> configure option is used.  Installation
+instructions are discussed <a href="#Installation">here</a>.  Examples
+of using <code>mod_lang</code> for various encodings and character sets can
+be seen <a href="#Usage">here</a>.
+
+<p>
+The most current version of <code>mod_charset</code> can be found at GitHub:
+<pre>
+  <a href="https://github.com/Castaglia/proftpd-mod_charset">https://github.com/Castaglia/proftpd-mod_charset</a>
+</pre>
+
+<h2>Directives</h2>
+<ul>
+  <li><a href="#CharsetEngine">CharsetEngine</a>
+  <li><a href="#CharsetRequired">CharsetRequired</a>
+</ul>
+
+<p>
+<hr>
+<h2><a name="CharsetEngine">CharsetEngine</a></h2>
+<strong>Syntax:</strong> CharsetEngine <em>on|off</em><br>
+<strong>Default:</strong> CharsetEngine on<br>
+<strong>Context:</strong> &quot;server config&quot;, <code>&lt;VirtualHost&gt;</code>, <code>&lt;Global&gt;</code><br>
+<strong>Module:</strong> mod_charset<br>
+<strong>Compatibility:</strong> 1.3.4rc1
+
+<p>
+The <code>CharsetEngine</code> directive enables or disables the module's
+checking for filename character set encoding.  If it is set to <em>off</em>
+this module does no checking.
+
+<p>
+<hr>
+<h2><a name="CharsetRequired">CharsetRequired</a></h2>
+<strong>Syntax:</strong> CharsetRequired <em>remote-charset [local-charset]</em><br>
+<strong>Default:</strong> None<br>
+<strong>Context:</strong> &quot;server config&quot;, <code>&lt;VirtualHost&gt;</code>, <code>&lt;Global&gt;</code><br>
+<strong>Module:</strong> mod_charset<br>
+<strong>Compatibility:</strong> 1.3.4rc1
+
+<p>
+The <code>CharsetRequired</code> directive is used to explicitly configure
+which character sets to use, and is <b>required</b> for <code>mod_charset</code>
+to perform any character set decoding checks.  By default, the
+<code>mod_charset</code> module will automatically discover the local
+character set, and thus the <em>local-charset</em> parameter is optional.
+
+<p>
+For example, to require that all filenames be encoded using UTF8, use the
+following in your <code>proftpd.conf</code>:
+<pre>
+  &lt;IfModule mod_charset.c&gt;
+    CharsetEngine on
+    CharsetRequired UTF8
+  &lt;/IfModule&gt;
+</pre>
+
+<p>
+For a full list of the character sets which are supported, use:
+<pre>
+  $ iconv --list
+</pre>
+
+<p>
+<hr>
+<h2><a name="Installation">Installation</a></h2>
+The <code>mod_charset</code> module is available from GitHub. <b>Note</b>
+that the <code>mod_charset</code> modules <b><i>requires</i></b> NLS support
+in the <code>proftpd</code> daemon.  To enable use of NLS
+(Natural Language Support) in your <code>proftpd</code> daemon, use the
+<code>--enable-nls</code> configure option, <i>e.g.</i>:
+<pre>
+  ./configure --enable-nls --with-modules=mod_charset ...
+</pre>
+Alternatively, <code>mod_charset</code> could be built as a DSO module:
+<pre>
+  ./configure --enable-dso --enable-nls --with-shared=mod_charset ...
+</pre>
+Then follow the usual steps:
+<pre>
+  make
+  make install
+</pre>
+
+<p>
+Alternatively, if your proftpd was compiled with DSO support, you can
+use the <code>prxs</code> tool to build <code>mod_charset</code> as a shared
+module:
+<pre>
+  # prxs -c -i -d mod_charset.c
+</pre>
+
+<p>
+<hr>
+<h2><a name="Usage">Usage</a></h2>
+
+<p>
+The <code><a href="http://www.proftpd.org/docs/modules/mod_lang.html"><code>mod_lang</code></a> module of <code>proftpd</code> handles encoding/character
+set issues automatically.  However, that modules tries to do the requested
+encoding/decoding; if those encoding/decoding operations fail, it continues
+using the bytes as sent by the client.
+
+<p>
+This behavior can cause problems later, for example with database systems
+to which <code>proftpd</code> communications which themselves expect properly
+encoded data.  Thus one solution is to use <code>mod_charset</code>, which
+can be used to <b>require</b> that the paths sent by clients be properly
+encoded -- and which will reject the commands/requests if the decoding fails.
+
+<p>
+For example, to require that all paths be properly UTF8-encoded, you would
+use:
+<pre>
+  &lt;IfModule mod_charset.c&gt;
+    CharsetEngine
+    CharsetRequired UTF8
+  &lt;/IfModule&gt;
+</pre>
+
+<p>
+The <code>mod_charset<code> module currently examines the paths used in
+commands that create new (or affect) files/paths on the server, <i>i.e.</i>:
+<ul>
+  <li><code>APPE</code>
+  <li><code>DELE</code>
+  <li><code>MKD</code>
+  <li><code>RNFR</code>
+  <li><code>RMD</code>
+  <li><code>STOR</code>
+  <li><code>XMKD</code>
+  <li><code>XRMD</code>
+</ul>
+
+<p>
+<hr><br>
+Author: <i>$Author: castaglia $</i><br>
+Last Updated: <i>$Date: 2010/08/10 17:39:08 $</i><br>
+<br><hr>
+
+<font size=2><b><i>
+&copy; Copyright 2012 TJ Saunders<br>
+ All Rights Reserved<br>
+</i></b></font>
+
+<hr><br>
+
+</body>
+</html>
+
