@@ -402,6 +402,7 @@ static cmdtable charset_cmdtab[] = {
   { PRE_CMD,	C_APPE,	G_WRITE, charset_pre_cmd,	TRUE, FALSE },
   { PRE_CMD,	C_DELE,	G_WRITE, charset_pre_cmd,	TRUE, FALSE },
   { PRE_CMD,	C_MKD,	G_WRITE, charset_pre_cmd,	TRUE, FALSE },
+  { PRE_CMD,	C_XMKD,	G_WRITE, charset_pre_cmd,	TRUE, FALSE },
   { PRE_CMD,	C_RNFR,	G_WRITE, charset_pre_cmd,	TRUE, FALSE },
   { PRE_CMD,	C_RNTO,	G_WRITE, charset_pre_cmd,	TRUE, FALSE },
   { PRE_CMD,	C_STOR,	G_WRITE, charset_pre_cmd,	TRUE, FALSE },
